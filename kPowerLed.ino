@@ -4,17 +4,16 @@
 //************************************************************
 #include "painlessMesh.h"
 #include "mash_parameter.h"
+#include "CRCMASH.h"
 
 
 Scheduler userScheduler; // to control your personal task
-painlessMesh  mesh;
-
-
+// (disabled) painlessMesh mesh; // now provided by CRCMASH.h
 char buttonState = 0;
 
-void receivedCallback( uint32_t from, String &msg ) {
+void handleBodyFrom( uint32_t from, const String &body ) {
 
-  String str1 = msg.c_str();
+  String str1 = body.c_str();
   String str2 = "powled0";
   String str3 = "powled1";
 
@@ -40,6 +39,8 @@ void setup() {
 
 void loop() {
 
+  // === CRCMASH Variant B: (from,body) queue ===
+  for (uint8_t _i=0; _i<4; ++_i){ uint32_t _from; String _b; if (!qPop2(_from, _b)) break; handleBodyFrom(_from, _b); }
   mesh.update();
 
   if (buttonState == 0) {
