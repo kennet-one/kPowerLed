@@ -17,6 +17,7 @@
 #include "legacy_proto.h"
 #include "stack_monitor.h"
 #include "legacy_root_sender.h"
+#include "powled_node.h"
 
 
 /* -------------------------------------------------------------------------- */
@@ -381,6 +382,8 @@ void app_main(void)
 	ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
 
 	ESP_ERROR_CHECK(esp_mesh_start());
+
+	powled_node_init();
 
 	ESP_LOGI(MESH_TAG,
 	         "mesh started, heap:%" PRId32 ", root_fixed:%d, topo:%d %s, ps:%d",
