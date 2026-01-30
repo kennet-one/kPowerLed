@@ -64,6 +64,9 @@ void powled_node_legacy_cmd(const char *txt)
 		feedback(&s_state);
 		return;
 	}
-
+	if (strcmp(txt, "pwech") == 0) {
+		feedback(&s_state);
+		return;
+	}
 	// інші команди ігноруємо (або логай, якщо хочеш)
 }
