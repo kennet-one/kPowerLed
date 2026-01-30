@@ -1,5 +1,6 @@
 #include <string.h>
 #include "powled_node.h"
+#include "legacy_root_sender.h"
 
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -8,7 +9,7 @@ static const char *TAG = "powled";
 
 #define POWLED_GPIO	GPIO_NUM_33
 
-// 0 -> LOW, 1 -> HIGH (як у твоєму Arduino-коді)
+// 0 -> LOW, 1 -> HIGH 
 static uint8_t s_state = 0;
 
 static void apply_state(void)
@@ -32,6 +33,15 @@ void powled_node_init(void)
 	apply_state();
 }
 
+void feedback (uint8_t *s_state)
+{
+	if (*s_state == 0) {
+		legacy_send_to_root("feedpowled0");
+	} else {
+		legacy_send_to_root("feedpowled1");
+	}
+}
+
 void powled_node_legacy_cmd(const char *txt)
 {
 	if (!txt) return;
@@ -39,11 +49,19 @@ void powled_node_legacy_cmd(const char *txt)
 	if (strcmp(txt, "powled0") == 0) {
 		s_state = 0;
 		apply_state();
+		feedback(&s_state);
 		return;
 	}
 	if (strcmp(txt, "powled1") == 0) {
 		s_state = 1;
 		apply_state();
+		feedback(&s_state);
+		return;
+	}
+	if (strcmp(txt, "powled") == 0) {
+		s_state = !s_state;
+		apply_state();
+		feedback(&s_state);
 		return;
 	}
 
