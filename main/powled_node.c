@@ -1,72 +1,78 @@
-#include <string.h>
 #include "powled_node.h"
-#include "legacy_root_sender.h"
+
+#include <stdio.h>
+#include <string.h>
 
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+
+#define POWLED_GPIO GPIO_NUM_33
 
 static const char *TAG = "powled";
+static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_initialized;
+static bool s_state;
 
-#define POWLED_GPIO	GPIO_NUM_33
-
-// 0 -> LOW, 1 -> HIGH 
-static uint8_t s_state = 0;
-
-static void apply_state(void)
+static void set_state(bool enabled)
 {
-	gpio_set_level(POWLED_GPIO, s_state ? 1 : 0);
-	ESP_LOGI(TAG, "GPIO%d=%d (state=%u)", (int)POWLED_GPIO, s_state ? 1 : 0, (unsigned)s_state);
+	portENTER_CRITICAL(&s_lock);
+	s_state = enabled;
+	gpio_set_level(POWLED_GPIO, enabled ? 1 : 0);
+	portEXIT_CRITICAL(&s_lock);
+	ESP_LOGI(TAG, "GPIO%d=%u", (int)POWLED_GPIO, enabled ? 1U : 0U);
 }
 
-void powled_node_init(void)
+static void toggle_state(void)
 {
-	gpio_config_t io = {
-		.pin_bit_mask = 1ULL << POWLED_GPIO,
-		.mode = GPIO_MODE_OUTPUT,
-		.pull_up_en = GPIO_PULLUP_DISABLE,
-		.pull_down_en = GPIO_PULLDOWN_DISABLE,
-		.intr_type = GPIO_INTR_DISABLE,
-	};
-	gpio_config(&io);
-
-	s_state = 0;	// дефолт як у тебе: powled0
-	apply_state();
+	portENTER_CRITICAL(&s_lock);
+	s_state = !s_state;
+	bool enabled = s_state;
+	gpio_set_level(POWLED_GPIO, enabled ? 1 : 0);
+	portEXIT_CRITICAL(&s_lock);
+	ESP_LOGI(TAG, "GPIO%d=%u", (int)POWLED_GPIO, enabled ? 1U : 0U);
 }
 
-void feedback (uint8_t *s_state)
+esp_err_t powled_node_init(void)
 {
-	if (*s_state == 0) {
-		legacy_send_to_root("feedpowled0");
-	} else {
-		legacy_send_to_root("feedpowled1");
-	}
+	esp_err_t err = gpio_reset_pin(POWLED_GPIO);
+	if (err != ESP_OK) return err;
+	err = gpio_set_direction(POWLED_GPIO, GPIO_MODE_OUTPUT);
+	if (err != ESP_OK) return err;
+	err = gpio_set_level(POWLED_GPIO, 0);
+	if (err != ESP_OK) return err;
+
+	portENTER_CRITICAL(&s_lock);
+	s_state = false;
+	s_initialized = true;
+	portEXIT_CRITICAL(&s_lock);
+	ESP_LOGI(TAG, "GPIO%d initialized OFF (active high)", (int)POWLED_GPIO);
+	return ESP_OK;
 }
 
-void powled_node_legacy_cmd(const char *txt)
+bool powled_node_state(void)
 {
-	if (!txt) return;
+	portENTER_CRITICAL(&s_lock);
+	bool state = s_state;
+	portEXIT_CRITICAL(&s_lock);
+	return state;
+}
 
-	if (strcmp(txt, "powled0") == 0) {
-		s_state = 0;
-		apply_state();
-		feedback(&s_state);
-		return;
+bool powled_node_handle_command(const char *text, char *reply, size_t reply_size)
+{
+	if (!text || !reply || reply_size == 0 || !s_initialized) return false;
+
+	if (strcmp(text, "powled0") == 0) {
+		set_state(false);
+	} else if (strcmp(text, "powled1") == 0) {
+		set_state(true);
+	} else if (strcmp(text, "powled") == 0) {
+		toggle_state();
+	} else if (strcmp(text, "pwech") != 0) {
+		return false;
 	}
-	if (strcmp(txt, "powled1") == 0) {
-		s_state = 1;
-		apply_state();
-		feedback(&s_state);
-		return;
-	}
-	if (strcmp(txt, "powled") == 0) {
-		s_state = !s_state;
-		apply_state();
-		feedback(&s_state);
-		return;
-	}
-	if (strcmp(txt, "pwech") == 0) {
-		feedback(&s_state);
-		return;
-	}
-	// інші команди ігноруємо (або логай, якщо хочеш)
+
+	snprintf(reply, reply_size, "feedpowled%u", powled_node_state() ? 1U : 0U);
+	reply[reply_size - 1] = '\0';
+	return true;
 }

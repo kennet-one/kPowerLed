@@ -108,13 +108,11 @@ menu "Example Configuration"
 
     config MESH_ROUTER_SSID
         string "Router SSID"
-        default "ROUTER_SSID"
         help
             Router SSID.
 
     config MESH_ROUTER_PASSWD
         string "Router password"
-        default "ROUTER_PASSWD"
         help
             Router password.
 
@@ -145,7 +143,6 @@ menu "Example Configuration"
 
     config MESH_AP_PASSWD
         string "Mesh AP Password"
-        default "MAP_PASSWD"
         help
             Mesh AP password.
 
@@ -169,4 +166,12 @@ menu "Example Configuration"
         default 50
         help
             The number of devices over the network(max: 300).
+
+    config KPOWERLED_MESH_RELAY_ELIGIBLE
+        bool "Advertise this firmware as relay eligible"
+        default n
+        help
+            This node may still connect through an ESP-MESH parent. Enabling
+            this flag advertises application-level relay eligibility and is
+            intentionally disabled for the current rollout.
 endmenu

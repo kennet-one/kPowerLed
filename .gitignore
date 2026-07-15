@@ -1,4 +1,5 @@
 # ESP-IDF stuff
 /build/
+/managed_components/
 sdkconfig
 sdkconfig.old
