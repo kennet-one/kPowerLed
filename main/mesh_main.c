@@ -30,6 +30,7 @@
 #include "mesh_time_sync.h"
 #include "mesh_v2_link.h"
 #include "powled_node.h"
+#include "powled_schedule.h"
 
 #define RX_SIZE 512
 #define RECOVERY_CHECK_MS 5000U
@@ -480,6 +481,8 @@ void app_main(void)
 	ESP_ERROR_CHECK(powled_node_init());
 	detect_rollback_state();
 	ESP_ERROR_CHECK(init_nvs());
+	mesh_time_sync_init();
+	ESP_ERROR_CHECK(powled_schedule_start());
 	ESP_ERROR_CHECK(esp_netif_init());
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
 	ESP_ERROR_CHECK(esp_netif_create_default_wifi_mesh_netifs(&s_netif_sta, NULL));
@@ -490,7 +493,6 @@ void app_main(void)
 	ESP_ERROR_CHECK(esp_wifi_start());
 
 	ESP_ERROR_CHECK(keemash_log_time_vprintf_start());
-	mesh_time_sync_init();
 	s_boot_seq = esp_random();
 	ESP_ERROR_CHECK(mesh_v2_link_init(TAG, KPOWERLED_RELAY_ELIGIBLE));
 	ESP_ERROR_CHECK(keemash_mesh_ota_receiver_start());

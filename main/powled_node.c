@@ -14,13 +14,19 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_initialized;
 static bool s_state;
 
-static void set_state(bool enabled)
+esp_err_t powled_node_set_state(bool enabled)
 {
+	if (!s_initialized) return ESP_ERR_INVALID_STATE;
 	portENTER_CRITICAL(&s_lock);
+	bool previous = s_state;
 	s_state = enabled;
-	gpio_set_level(POWLED_GPIO, enabled ? 1 : 0);
+	esp_err_t err = gpio_set_level(POWLED_GPIO, enabled ? 1 : 0);
+	if (err != ESP_OK) s_state = previous;
 	portEXIT_CRITICAL(&s_lock);
-	ESP_LOGI(TAG, "GPIO%d=%u", (int)POWLED_GPIO, enabled ? 1U : 0U);
+	if (err == ESP_OK) {
+		ESP_LOGI(TAG, "GPIO%d=%u", (int)POWLED_GPIO, enabled ? 1U : 0U);
+	}
+	return err;
 }
 
 static void toggle_state(void)
@@ -63,9 +69,9 @@ bool powled_node_handle_command(const char *text, char *reply, size_t reply_size
 	if (!text || !reply || reply_size == 0 || !s_initialized) return false;
 
 	if (strcmp(text, "powled0") == 0) {
-		set_state(false);
+		if (powled_node_set_state(false) != ESP_OK) return false;
 	} else if (strcmp(text, "powled1") == 0) {
-		set_state(true);
+		if (powled_node_set_state(true) != ESP_OK) return false;
 	} else if (strcmp(text, "powled") == 0) {
 		toggle_state();
 	} else if (strcmp(text, "pwech") != 0) {

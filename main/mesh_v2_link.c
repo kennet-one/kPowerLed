@@ -18,6 +18,7 @@
 #include "mesh_log_stream.h"
 #include "mesh_time_sync.h"
 #include "powled_node.h"
+#include "powled_schedule.h"
 
 static const char *TAG = "mesh_link";
 static keemash_mesh_tx_broker_t *s_tx_broker;
@@ -144,14 +145,23 @@ bool keemash_mesh_node_on_control_command_result(const char *text, uint8_t *stat
 	}
 
 	char reply[32] = {0};
-	if (!powled_node_handle_command(text, reply, sizeof(reply))) return false;
-	if (status) *status = MESH_V2_CONTROL_STATUS_OK;
+	esp_err_t command_error = ESP_OK;
+	bool handled = powled_schedule_execute_command(
+		text, &command_error, reply, sizeof(reply));
+	if (!handled) {
+		handled = powled_node_handle_command(text, reply, sizeof(reply));
+		command_error = handled ? ESP_OK : ESP_ERR_NOT_SUPPORTED;
+	}
+	if (!handled) return false;
+	if (status) *status = command_error == ESP_OK
+		? MESH_V2_CONTROL_STATUS_OK : MESH_V2_CONTROL_STATUS_FAILED;
 	if (result && result_size > 0) {
-		snprintf(result, result_size, "%s", reply);
+		snprintf(result, result_size, "%s",
+			reply[0] ? reply : esp_err_to_name(command_error));
 		result[result_size - 1] = '\0';
 	}
 	/* KeeMASH UART compatibility consumes CONTROL EVENT text at node0. */
-	(void)mesh_v2_node_send_event(0, reply);
+	if (reply[0]) (void)mesh_v2_node_send_event(0, reply);
 	return true;
 }
 
