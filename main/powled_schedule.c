@@ -5,14 +5,28 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "keemash_mesh_node.h"
 #include "powled_node.h"
 
 #define POWLED_SCHEDULE_BLOB_MAGIC 0x3153504bUL
 #define POWLED_SCHEDULE_ACTION_OFF 0U
 #define POWLED_SCHEDULE_ACTION_ON 1U
+#define STATUS_POLL_MS 500U
+#define STATUS_HEARTBEAT_MS 30000U
+#define STATUS_RETRY_MS 5000U
+#define TIME_SYNC_STALE_MS 60000U
 
 static const char *TAG = "powled_sched";
 static keemash_weekly_schedule_t *s_schedule;
+static TaskHandle_t s_publisher_task;
+
+static uint64_t now_ms(void)
+{
+	return (uint64_t)esp_timer_get_time() / 1000ULL;
+}
 
 static bool parse_hex_field(const char *text, size_t offset, size_t digits,
 			    uint32_t *value)
@@ -74,6 +88,84 @@ static void format_point(char *out, size_t out_size, uint32_t generation,
 		 (unsigned)point->days_mask);
 }
 
+static void format_diagnostic(char *out, size_t out_size,
+			      const keemash_weekly_schedule_status_t *status)
+{
+	uint8_t flags = (status->clock_valid ? 1U : 0U) |
+		(status->config.enabled ? 2U : 0U) |
+		(status->config.persistence_enabled ? 4U : 0U) |
+		(status->catch_up_pending ? 8U : 0U) |
+		(status->last_apply_valid ? 16U : 0U) |
+		(status->time_sync_age_ms > TIME_SYNC_STALE_MS ? 32U : 0U);
+	uint8_t weekday = status->local_weekday <= 6U ? status->local_weekday : 0x0fU;
+	uint16_t minute = status->local_minute < 1440U ? status->local_minute : 0x0fffU;
+	uint8_t last = status->last_apply_valid && status->last_apply_index < 8U ?
+		status->last_apply_index : 0x0fU;
+	uint8_t kind = status->last_apply_valid ? status->last_apply_kind : 0U;
+	uint32_t age_s = status->last_apply_valid ? status->last_apply_age_ms / 1000U :
+		0xffffU;
+	if (age_s > 0xffffU) age_s = 0xffffU;
+	snprintf(out, out_size, "PSD%08" PRIX32 "%02X%X%03X%X%X%04X%04X",
+		 status->config.generation, (unsigned)flags, (unsigned)weekday,
+		 (unsigned)minute, (unsigned)last, (unsigned)kind,
+		 (unsigned)((uint32_t)status->last_error & 0xffffU), (unsigned)age_s);
+}
+
+static bool publish_token(const char *token)
+{
+	return mesh_v2_node_send_event(0, token) == ESP_OK;
+}
+
+static void publisher_task(void *arg)
+{
+	(void)arg;
+	char last_meta[32] = {0};
+	char last_diag_key[32] = {0};
+	bool last_output = false;
+	bool have_output = false;
+	uint64_t last_sent_ms = 0;
+	uint64_t last_attempt_ms = 0;
+
+	for (;;) {
+		keemash_weekly_schedule_status_t status;
+		powled_schedule_get_status(&status);
+		char meta[32] = {0};
+		char diagnostic[32] = {0};
+		char diagnostic_key[32] = {0};
+		char output[16] = {0};
+		format_meta(meta, sizeof(meta), &status);
+		format_diagnostic(diagnostic, sizeof(diagnostic), &status);
+		snprintf(diagnostic_key, sizeof(diagnostic_key), "%08" PRIX32 ":%u:%u:%u:%u:%u:%d",
+			 status.config.generation, status.clock_valid ? 1U : 0U,
+			 status.catch_up_pending ? 1U : 0U,
+			 (unsigned)status.local_minute, (unsigned)status.last_apply_index,
+			 (unsigned)status.last_apply_kind, (int)status.last_error);
+		bool output_on = powled_node_state();
+		snprintf(output, sizeof(output), "feedpowled%u", output_on ? 1U : 0U);
+		uint64_t now = now_ms();
+		bool changed = strcmp(meta, last_meta) != 0 ||
+			strcmp(diagnostic_key, last_diag_key) != 0 ||
+			!have_output || output_on != last_output;
+		bool heartbeat_due = now - last_sent_ms >= STATUS_HEARTBEAT_MS;
+		bool retry_ready = now - last_attempt_ms >= STATUS_RETRY_MS;
+		if ((changed || heartbeat_due) && retry_ready) {
+			last_attempt_ms = now;
+			bool ok = publish_token(output) && publish_token(meta) &&
+				publish_token(diagnostic);
+			if (ok) {
+				snprintf(last_meta, sizeof(last_meta), "%s", meta);
+				snprintf(last_diag_key, sizeof(last_diag_key), "%s", diagnostic_key);
+				last_output = output_on;
+				have_output = true;
+				last_sent_ms = now;
+			} else {
+				ESP_LOGD(TAG, "status submit deferred");
+			}
+		}
+		vTaskDelay(pdMS_TO_TICKS(STATUS_POLL_MS));
+	}
+}
+
 esp_err_t powled_schedule_start(void)
 {
 	if (s_schedule) return ESP_OK;
@@ -91,6 +183,18 @@ esp_err_t powled_schedule_start(void)
 		.apply = apply_point,
 	};
 	return keemash_weekly_schedule_start(&s_schedule, &options);
+}
+
+esp_err_t powled_schedule_publisher_start(void)
+{
+	if (s_publisher_task) return ESP_OK;
+	if (!s_schedule) return ESP_ERR_INVALID_STATE;
+	if (xTaskCreate(publisher_task, "powled_status", 3072, NULL, 5,
+			&s_publisher_task) != pdPASS) {
+		s_publisher_task = NULL;
+		return ESP_ERR_NO_MEM;
+	}
+	return ESP_OK;
 }
 
 void powled_schedule_get_status(keemash_weekly_schedule_status_t *status)
@@ -153,6 +257,10 @@ bool powled_schedule_execute_command(const char *text, esp_err_t *error,
 				format_meta(reply, reply_size, &status);
 			}
 		}
+	} else if (length == 3 && strcmp(text, "PSD") == 0) {
+		keemash_weekly_schedule_status_t status;
+		powled_schedule_get_status(&status);
+		format_diagnostic(reply, reply_size, &status);
 	} else if (length == 3 && strcmp(text, "PSQ") == 0) {
 		keemash_weekly_schedule_status_t status;
 		powled_schedule_get_status(&status);

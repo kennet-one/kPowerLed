@@ -496,6 +496,7 @@ void app_main(void)
 	s_boot_seq = esp_random();
 	ESP_ERROR_CHECK(mesh_v2_link_init(TAG, KPOWERLED_RELAY_ELIGIBLE));
 	ESP_ERROR_CHECK(keemash_mesh_ota_receiver_start());
+	ESP_ERROR_CHECK(powled_schedule_publisher_start());
 
 	ESP_ERROR_CHECK(esp_mesh_init());
 	ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
