@@ -24,6 +24,7 @@
 #include "keemash_log_time_vprintf.h"
 #include "keemash_mesh_node.h"
 #include "keemash_mesh_ota_receiver.h"
+#include "keemash_mesh_ota_v3_receiver.h"
 #include "legacy_proto.h"
 #include "mesh_log_stream.h"
 #include "mesh_proto.h"
@@ -82,6 +83,12 @@ static uint8_t s_last_recovery_reason;
 static recovery_phase_t s_recovery_phase = RECOVERY_OK;
 static bool s_rollback_pending;
 static bool s_telemetry_synced;
+
+static esp_err_t ota_v3_preflight(void *context)
+{
+	(void)context;
+	return powled_node_state() ? ESP_ERR_INVALID_STATE : ESP_OK;
+}
 
 static uint32_t tick_ms(void)
 {
@@ -241,7 +248,8 @@ static void recovery_task(void *arg)
 			if (down_ms >= RECOVERY_ACTION_BACKOFF_MS &&
 			    (s_last_soft_reconnect_ms == 0 ||
 			     now - s_last_soft_reconnect_ms >= RECOVERY_ACTION_BACKOFF_MS) &&
-			    !keemash_mesh_ota_receiver_active()) {
+			    !keemash_mesh_ota_receiver_active() &&
+			    !keemash_mesh_ota_v3_receiver_active()) {
 				s_last_soft_reconnect_ms = now;
 				s_soft_reconnect_count++;
 				s_last_recovery_reason = MESH_V2_RECOVERY_REASON_SOFT_RECONNECT;
@@ -249,7 +257,9 @@ static void recovery_task(void *arg)
 				(void)esp_mesh_connect();
 			}
 			if (down_ms >= RECOVERY_RESTART_MS &&
-			    !keemash_mesh_ota_receiver_active() && !s_mesh_recovering) {
+			    !keemash_mesh_ota_receiver_active() &&
+			    !keemash_mesh_ota_v3_receiver_active() &&
+			    !s_mesh_recovering) {
 				s_recovery_phase = RECOVERY_MESH_RESTART;
 				s_mesh_restart_count++;
 				s_last_recovery_reason = MESH_V2_RECOVERY_REASON_MESH_RESTART;
@@ -292,7 +302,8 @@ static void recovery_task(void *arg)
 		if (down_ms >= RECOVERY_RECONNECT_MS &&
 		    (s_last_soft_reconnect_ms == 0 ||
 		     now - s_last_soft_reconnect_ms >= RECOVERY_ACTION_BACKOFF_MS) &&
-		    !keemash_mesh_ota_receiver_active()) {
+		    !keemash_mesh_ota_receiver_active() &&
+		    !keemash_mesh_ota_v3_receiver_active()) {
 			s_last_soft_reconnect_ms = now;
 			s_recovery_phase = RECOVERY_RECONNECT;
 			s_soft_reconnect_count++;
@@ -496,6 +507,11 @@ void app_main(void)
 	s_boot_seq = esp_random();
 	ESP_ERROR_CHECK(mesh_v2_link_init(TAG, KPOWERLED_RELAY_ELIGIBLE));
 	ESP_ERROR_CHECK(keemash_mesh_ota_receiver_start());
+	const keemash_mesh_ota_v3_config_t ota_v3_config = {
+		.preflight = ota_v3_preflight,
+	};
+	ESP_ERROR_CHECK(keemash_mesh_ota_v3_receiver_start(&ota_v3_config));
+	mesh_v2_node_enable_capabilities(MESH_V2_CAP_OTA_V3);
 	ESP_ERROR_CHECK(powled_schedule_publisher_start());
 
 	ESP_ERROR_CHECK(esp_mesh_init());
